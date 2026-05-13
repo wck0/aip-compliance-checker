@@ -6,8 +6,53 @@ and posts feedback as GitHub comments.
 
 import os
 import json
-from anthropic import Anthropic
+import time
+from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
 from github import Github
+
+MAX_RETRIES = 5
+INITIAL_BACKOFF_SECONDS = 5
+MAX_BACKOFF_SECONDS = 60
+
+
+def _retry_after_seconds(error):
+    """Honor the Anthropic `retry-after` header when present on a rate-limit response."""
+    response = getattr(error, "response", None)
+    headers = getattr(response, "headers", None) if response is not None else None
+    value = headers.get("retry-after") if headers else None
+    if not value:
+        return None
+    try:
+        return max(0, int(float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _create_message_with_retries(client, **kwargs):
+    """Call Anthropic, retrying on rate limits and transient server errors."""
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            return client.messages.create(**kwargs)
+        except RateLimitError as e:
+            if attempt == MAX_RETRIES:
+                raise
+            wait = _retry_after_seconds(e) or min(
+                INITIAL_BACKOFF_SECONDS * (2 ** attempt), MAX_BACKOFF_SECONDS
+            )
+            print(f"⏳ Anthropic rate-limited (attempt {attempt + 1}/{MAX_RETRIES + 1}); sleeping {wait}s")
+        except APIStatusError as e:
+            status = getattr(e, "status_code", None)
+            if attempt == MAX_RETRIES or status is None or status < 500:
+                raise
+            wait = min(INITIAL_BACKOFF_SECONDS * (2 ** attempt), MAX_BACKOFF_SECONDS)
+            print(f"⏳ Anthropic API error {status} (attempt {attempt + 1}/{MAX_RETRIES + 1}); sleeping {wait}s")
+        except APIConnectionError:
+            if attempt == MAX_RETRIES:
+                raise
+            wait = min(INITIAL_BACKOFF_SECONDS * (2 ** attempt), MAX_BACKOFF_SECONDS)
+            print(f"⏳ Anthropic connection error (attempt {attempt + 1}/{MAX_RETRIES + 1}); sleeping {wait}s")
+        time.sleep(wait)
+    raise RuntimeError("Anthropic retry loop exited without returning")
 
 def get_pr_diff(gh_client, repo_owner, repo_name, pr_number):
     """Fetch the diff for a pull request."""
@@ -103,7 +148,7 @@ def review_code_with_claude(diff_content, total_changes, repo_path=".", proto_co
     oauth_token = os.getenv("CLAUDE_CODE_OAUTH_TOKEN")
     if not oauth_token:
         raise RuntimeError("CLAUDE_CODE_OAUTH_TOKEN is not set")
-    client = Anthropic(auth_token=oauth_token)
+    client = Anthropic(auth_token=oauth_token, max_retries=0)
     
     # Try to load custom skill from repository
     custom_skill = load_review_skill(repo_path)
@@ -140,7 +185,8 @@ Total lines changed: {total_changes}"""
     else:
         user_message = pr_section
 
-    message = client.messages.create(
+    message = _create_message_with_retries(
+        client,
         model="claude-opus-4-6",
         max_tokens=2000,
         system=system_prompt,
