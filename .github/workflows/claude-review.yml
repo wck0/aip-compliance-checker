@@ -30,6 +30,11 @@ on:
         type: string
         default: 'canonical/landscape-proto'
         description: 'Repository containing proto definitions used as context for the AIP review (owner/repo format)'
+      openrouter_model:
+        required: false
+        type: string
+        default: 'anthropic/claude-opus-4.7'
+        description: 'OpenRouter model slug. Examples: anthropic/claude-opus-4.7, anthropic/claude-sonnet-4.6, anthropic/claude-haiku-4.5'
 
 permissions:
   contents: read
@@ -101,6 +106,7 @@ jobs:
       - name: Review PR with Claude
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL: ${{ inputs.openrouter_model }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}

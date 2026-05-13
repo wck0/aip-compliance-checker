@@ -20,7 +20,7 @@ MAX_BACKOFF_SECONDS = 60
 MAX_TOKENS = 2000
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-OPENROUTER_MODEL = "anthropic/claude-opus-4.7"
+DEFAULT_OPENROUTER_MODEL = "anthropic/claude-opus-4.7"
 ANTHROPIC_MODEL = "claude-opus-4-7"
 
 Backend = namedtuple("Backend", ["kind", "client", "model"])
@@ -109,7 +109,8 @@ def _build_backends():
     openrouter_key = os.getenv("OPENROUTER_API_KEY")
     if openrouter_key:
         client = OpenAI(api_key=openrouter_key, base_url=OPENROUTER_BASE_URL, max_retries=0)
-        backends.append(Backend(kind="openrouter", client=client, model=OPENROUTER_MODEL))
+        model = os.getenv("OPENROUTER_MODEL") or DEFAULT_OPENROUTER_MODEL
+        backends.append(Backend(kind="openrouter", client=client, model=model))
     if not backends:
         raise RuntimeError("Neither CLAUDE_CODE_OAUTH_TOKEN nor OPENROUTER_API_KEY is set")
     print("🔌 Backend order: " + " -> ".join(f"{b.kind}({b.model})" for b in backends))
