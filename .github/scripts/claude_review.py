@@ -100,7 +100,10 @@ def load_proto_context(proto_context_path, proto_repo=None, proto_ref=None):
 
 def review_code_with_claude(diff_content, total_changes, repo_path=".", proto_context=None):
     """Use Claude to review the PR diff."""
-    client = Anthropic()
+    oauth_token = os.getenv("CLAUDE_CODE_OAUTH_TOKEN")
+    if not oauth_token:
+        raise RuntimeError("CLAUDE_CODE_OAUTH_TOKEN is not set")
+    client = Anthropic(auth_token=oauth_token)
     
     # Try to load custom skill from repository
     custom_skill = load_review_skill(repo_path)
@@ -168,13 +171,13 @@ def post_review_comment(gh_client, repo_owner, repo_name, pr_number, review_text
 
 def main():
     # Get environment variables
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    oauth_token = os.getenv("CLAUDE_CODE_OAUTH_TOKEN")
     github_token = os.getenv("GITHUB_TOKEN")
     pr_number = int(os.getenv("PR_NUMBER"))
     repo_owner = os.getenv("REPO_OWNER")
     repo_name = os.getenv("REPO_NAME")
-    
-    if not all([api_key, github_token, pr_number, repo_owner, repo_name]):
+
+    if not all([oauth_token, github_token, pr_number, repo_owner, repo_name]):
         print("❌ Missing required environment variables")
         return
     
