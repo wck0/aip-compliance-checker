@@ -25,7 +25,7 @@ on:
       proto_repo:
         required: false
         type: string
-        default: 'canonical/landscape-proto'
+        default: 'david-mclain/landscape-proto'
         description: 'Repository containing proto definitions used as context for the AIP review (owner/repo format)'
 
 permissions:
@@ -63,7 +63,7 @@ jobs:
       - name: Resolve proto repo branch
         id: proto
         env:
-          PROTO_REPO: ${{ inputs.proto_repo || 'canonical/landscape-proto' }}
+          PROTO_REPO: ${{ inputs.proto_repo || 'david-mclain/landscape-proto' }}
           HEAD_REF: ${{ github.head_ref }}
           PROTO_REPO_TOKEN: ${{ secrets.PROTO_REPO_TOKEN }}
         run: |
