@@ -99,23 +99,24 @@ def _call_with_retries(call_fn):
     raise RuntimeError("Retry loop exited without returning")
 
 
-def _select_backend():
-    """Pick a chat backend; OpenRouter wins when its key is set, else fall back to the Anthropic OAuth path."""
-    openrouter_key = os.getenv("OPENROUTER_API_KEY")
-    if openrouter_key:
-        print(f"🔌 Using OpenRouter backend (model={OPENROUTER_MODEL})")
-        client = OpenAI(api_key=openrouter_key, base_url=OPENROUTER_BASE_URL, max_retries=0)
-        return Backend(kind="openrouter", client=client, model=OPENROUTER_MODEL)
+def _build_backends():
+    """Return chat backends in priority order: Anthropic preferred, OpenRouter as fallback."""
+    backends = []
     oauth_token = os.getenv("CLAUDE_CODE_OAUTH_TOKEN")
     if oauth_token:
-        print(f"🔌 Using Anthropic OAuth backend (model={ANTHROPIC_MODEL})")
         client = Anthropic(auth_token=oauth_token, max_retries=0)
-        return Backend(kind="anthropic", client=client, model=ANTHROPIC_MODEL)
-    raise RuntimeError("Neither OPENROUTER_API_KEY nor CLAUDE_CODE_OAUTH_TOKEN is set")
+        backends.append(Backend(kind="anthropic", client=client, model=ANTHROPIC_MODEL))
+    openrouter_key = os.getenv("OPENROUTER_API_KEY")
+    if openrouter_key:
+        client = OpenAI(api_key=openrouter_key, base_url=OPENROUTER_BASE_URL, max_retries=0)
+        backends.append(Backend(kind="openrouter", client=client, model=OPENROUTER_MODEL))
+    if not backends:
+        raise RuntimeError("Neither CLAUDE_CODE_OAUTH_TOKEN nor OPENROUTER_API_KEY is set")
+    print("🔌 Backend order: " + " -> ".join(f"{b.kind}({b.model})" for b in backends))
+    return backends
 
 
-def _invoke_chat(backend, system_prompt, user_message):
-    """Call the selected backend with retries and return the assistant's text."""
+def _call_backend(backend, system_prompt, user_message):
     if backend.kind == "openrouter":
         def call():
             return backend.client.chat.completions.create(
@@ -138,6 +139,20 @@ def _invoke_chat(backend, system_prompt, user_message):
         )
     resp = _call_with_retries(call)
     return resp.content[0].text
+
+
+def _invoke_chat(backends, system_prompt, user_message):
+    """Try each backend in priority order; advance to the next on ClaudeAPIUnavailableError."""
+    for i, backend in enumerate(backends):
+        print(f"🤖 Trying {backend.kind} backend (model={backend.model})")
+        try:
+            return _call_backend(backend, system_prompt, user_message)
+        except ClaudeAPIUnavailableError as e:
+            remaining = backends[i + 1:]
+            if not remaining:
+                raise
+            print(f"↪️  {backend.kind} unavailable ({e.reason}); falling back to {remaining[0].kind}")
+    raise RuntimeError("No backend produced a response")
 
 def get_pr_diff(gh_client, repo_owner, repo_name, pr_number):
     """Fetch the diff for a pull request."""
@@ -229,8 +244,8 @@ def load_proto_context(proto_context_path, proto_repo=None, proto_ref=None):
 
 
 def review_code_with_claude(diff_content, total_changes, repo_path=".", proto_context=None):
-    """Use Claude (via OpenRouter or Anthropic OAuth) to review the PR diff."""
-    backend = _select_backend()
+    """Use Claude (Anthropic OAuth preferred, OpenRouter as fallback) to review the PR diff."""
+    backends = _build_backends()
 
     # Try to load custom skill from repository
     custom_skill = load_review_skill(repo_path)
@@ -267,7 +282,7 @@ Total lines changed: {total_changes}"""
     else:
         user_message = pr_section
 
-    return _invoke_chat(backend, system_prompt, user_message)
+    return _invoke_chat(backends, system_prompt, user_message)
 
 
 def post_review_comment(gh_client, repo_owner, repo_name, pr_number, review_text):
