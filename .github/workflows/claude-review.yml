@@ -57,15 +57,16 @@ jobs:
         run: pip install anthropic openai PyGithub
       
       - name: Download Claude review script and skill
+        if: ${{ inputs.script_repo != '' }}
         run: |
           mkdir -p .github/scripts
           mkdir -p .claude/skills/aip-review
           echo "📥 Downloading claude_review.py from ${{ inputs.script_repo }}@${{ inputs.script_ref }}"
-          curl -L -o .github/scripts/claude_review.py \
+          curl -fL -o .github/scripts/claude_review.py \
             "https://raw.githubusercontent.com/${{ inputs.script_repo }}/${{ inputs.script_ref }}/.github/scripts/claude_review.py"
           chmod +x .github/scripts/claude_review.py
           echo "📚 Downloading aip-review skill from ${{ inputs.script_repo }}@${{ inputs.script_ref }}"
-          curl -L -o .claude/skills/aip-review/SKILL.md \
+          curl -fL -o .claude/skills/aip-review/SKILL.md \
             "https://raw.githubusercontent.com/${{ inputs.script_repo }}/${{ inputs.script_ref }}/.claude/skills/aip-review/SKILL.md"
 
       - name: Resolve proto repo branch
