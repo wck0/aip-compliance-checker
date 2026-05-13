@@ -99,20 +99,27 @@ def _call_with_retries(call_fn):
     raise RuntimeError("Retry loop exited without returning")
 
 
+def _anthropic_enabled():
+    return os.getenv("USE_ANTHROPIC", "").lower() in ("1", "true", "yes")
+
+
 def _build_backends():
-    """Return chat backends in priority order: Anthropic preferred, OpenRouter as fallback."""
+    """Return chat backends in priority order: OpenRouter by default; Anthropic only as fallback when USE_ANTHROPIC is set."""
     backends = []
-    oauth_token = os.getenv("CLAUDE_CODE_OAUTH_TOKEN")
-    if oauth_token:
-        client = Anthropic(auth_token=oauth_token, max_retries=0)
-        backends.append(Backend(kind="anthropic", client=client, model=ANTHROPIC_MODEL))
     openrouter_key = os.getenv("OPENROUTER_API_KEY")
     if openrouter_key:
         client = OpenAI(api_key=openrouter_key, base_url=OPENROUTER_BASE_URL, max_retries=0)
         model = os.getenv("OPENROUTER_MODEL") or DEFAULT_OPENROUTER_MODEL
         backends.append(Backend(kind="openrouter", client=client, model=model))
+    if _anthropic_enabled():
+        oauth_token = os.getenv("CLAUDE_CODE_OAUTH_TOKEN")
+        if oauth_token:
+            client = Anthropic(auth_token=oauth_token, max_retries=0)
+            backends.append(Backend(kind="anthropic", client=client, model=ANTHROPIC_MODEL))
+        else:
+            print("⚠️  USE_ANTHROPIC is set but CLAUDE_CODE_OAUTH_TOKEN is missing; skipping Anthropic backend")
     if not backends:
-        raise RuntimeError("Neither CLAUDE_CODE_OAUTH_TOKEN nor OPENROUTER_API_KEY is set")
+        raise RuntimeError("No backend configured: set OPENROUTER_API_KEY (or USE_ANTHROPIC=true with CLAUDE_CODE_OAUTH_TOKEN)")
     print("🔌 Backend order: " + " -> ".join(f"{b.kind}({b.model})" for b in backends))
     return backends
 
@@ -336,8 +343,8 @@ def main():
     repo_owner = os.getenv("REPO_OWNER")
     repo_name = os.getenv("REPO_NAME")
 
-    if not (openrouter_key or oauth_token):
-        print("❌ Need either OPENROUTER_API_KEY or CLAUDE_CODE_OAUTH_TOKEN")
+    if not openrouter_key and not (_anthropic_enabled() and oauth_token):
+        print("❌ Need OPENROUTER_API_KEY (or USE_ANTHROPIC=true with CLAUDE_CODE_OAUTH_TOKEN)")
         return
     if not all([github_token, pr_number, repo_owner, repo_name]):
         print("❌ Missing required environment variables")

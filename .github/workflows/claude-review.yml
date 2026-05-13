@@ -1,4 +1,4 @@
-name: Claude Code Review
+name: AI Code Review
 
 on:
   pull_request:
@@ -7,10 +7,10 @@ on:
     secrets:
       OPENROUTER_API_KEY:
         required: false
-        description: 'OpenRouter API key (preferred backend; falls back to CLAUDE_CODE_OAUTH_TOKEN if unset)'
+        description: 'OpenRouter API key (default backend)'
       CLAUDE_CODE_OAUTH_TOKEN:
         required: false
-        description: 'Claude Code OAuth token (fallback when OPENROUTER_API_KEY is not set)'
+        description: 'Claude Code OAuth token (only used when use_anthropic is true; serves as fallback to OpenRouter)'
       PROTO_REPO_TOKEN:
         required: false
         description: 'GitHub token with read access to the proto repo (required if proto_repo is private)'
@@ -35,6 +35,11 @@ on:
         type: string
         default: 'google/gemma-4-31b-it'
         description: 'OpenRouter model slug. Examples: google/gemma-4-31b-it, openai/gpt-5.1-codex-max, google/gemini-2.5-pro'
+      use_anthropic:
+        required: false
+        type: boolean
+        default: false
+        description: 'Enable the Anthropic backend as a fallback to OpenRouter. Requires CLAUDE_CODE_OAUTH_TOKEN.'
 
 permissions:
   contents: read
@@ -56,7 +61,7 @@ jobs:
       - name: Install dependencies
         run: pip install anthropic openai PyGithub
       
-      - name: Download Claude review script and skill
+      - name: Download AI review script and skill
         if: ${{ inputs.script_repo != '' }}
         run: |
           mkdir -p .github/scripts
@@ -104,10 +109,11 @@ jobs:
           path: .proto-context
           token: ${{ secrets.PROTO_REPO_TOKEN || secrets.GITHUB_TOKEN }}
 
-      - name: Review PR with Claude
+      - name: Review PR
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL: ${{ inputs.openrouter_model }}
+          USE_ANTHROPIC: ${{ inputs.use_anthropic }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
