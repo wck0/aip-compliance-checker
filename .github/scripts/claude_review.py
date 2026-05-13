@@ -24,10 +24,14 @@ class ClaudeAPIUnavailableError(Exception):
         super().__init__(f"{reason}: {original}")
 
 
+def _response_headers(error):
+    response = getattr(error, "response", None)
+    return getattr(response, "headers", None) if response is not None else None
+
+
 def _retry_after_seconds(error):
     """Honor the Anthropic `retry-after` header when present on a rate-limit response."""
-    response = getattr(error, "response", None)
-    headers = getattr(response, "headers", None) if response is not None else None
+    headers = _response_headers(error)
     value = headers.get("retry-after") if headers else None
     if not value:
         return None
@@ -37,18 +41,36 @@ def _retry_after_seconds(error):
         return None
 
 
+def _format_rate_limit_diagnostics(error):
+    """Pull the error body and anthropic-ratelimit-* headers off a 429 for logging."""
+    parts = [f"error={error}"]
+    headers = _response_headers(error) or {}
+    interesting = sorted(
+        (k, v) for k, v in headers.items()
+        if k.lower().startswith("anthropic-ratelimit-") or k.lower() == "retry-after"
+    )
+    if interesting:
+        parts.append("headers={" + ", ".join(f"{k}={v}" for k, v in interesting) + "}")
+    return " | ".join(parts)
+
+
 def _create_message_with_retries(client, **kwargs):
     """Call Anthropic, retrying on rate limits and transient server errors."""
     for attempt in range(MAX_RETRIES + 1):
         try:
             return client.messages.create(**kwargs)
         except RateLimitError as e:
+            diagnostics = _format_rate_limit_diagnostics(e)
             if attempt == MAX_RETRIES:
+                print(f"❌ Anthropic rate-limited after {MAX_RETRIES + 1} attempts | {diagnostics}")
                 raise ClaudeAPIUnavailableError("rate limited", e) from e
             wait = _retry_after_seconds(e) or min(
                 INITIAL_BACKOFF_SECONDS * (2 ** attempt), MAX_BACKOFF_SECONDS
             )
-            print(f"⏳ Anthropic rate-limited (attempt {attempt + 1}/{MAX_RETRIES + 1}); sleeping {wait}s")
+            print(
+                f"⏳ Anthropic rate-limited (attempt {attempt + 1}/{MAX_RETRIES + 1}); "
+                f"sleeping {wait}s | {diagnostics}"
+            )
         except APIStatusError as e:
             status = getattr(e, "status_code", None)
             if status is None or status < 500:
