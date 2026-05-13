@@ -43,7 +43,7 @@ def get_pr_diff(gh_client, repo_owner, repo_name, pr_number):
 def load_review_skill(repo_path="."):
     """Load the AI review skill from the repository."""
     skill_path = os.path.join(repo_path, ".claude", "skills", "aip-review", "SKILL.md")
-    
+
     if os.path.exists(skill_path):
         print(f"📚 Loading review skill from {skill_path}")
         with open(skill_path, "r") as f:
@@ -53,7 +53,52 @@ def load_review_skill(repo_path="."):
         return None
 
 
-def review_code_with_claude(diff_content, total_changes, repo_path="."):
+def load_proto_context(proto_context_path, proto_repo=None, proto_ref=None):
+    """Load all .proto files from the checked-out proto repo as review context."""
+    if not proto_context_path or not os.path.isdir(proto_context_path):
+        print(f"⚠️  Proto context path not found: {proto_context_path}")
+        return None
+
+    skip_dirs = {"vendor", "node_modules", ".git", "third_party"}
+    proto_files = []
+    for root, dirs, files in os.walk(proto_context_path):
+        dirs[:] = [d for d in dirs if d not in skip_dirs]
+        for name in files:
+            if not name.endswith(".proto"):
+                continue
+            full = os.path.join(root, name)
+            rel = os.path.relpath(full, proto_context_path)
+            with open(full, "r", encoding="utf-8", errors="replace") as fh:
+                proto_files.append((rel, fh.read()))
+
+    if not proto_files:
+        print(f"⚠️  No .proto files found under {proto_context_path}")
+        return None
+
+    proto_files.sort(key=lambda x: x[0])
+    source = f"{proto_repo}@{proto_ref}" if proto_repo and proto_ref else proto_context_path
+    print(f"📜 Loaded {len(proto_files)} .proto files from {source}")
+
+    parts = [
+        "## Proto Definitions Context",
+        "",
+        f"The following `.proto` files are provided from `{source}` as the authoritative "
+        "API surface definitions for this review. Treat them as the source of truth when "
+        "evaluating whether the Go code in the PR diff is AIP-compliant — cross-reference "
+        "Go types, methods, and field names against these protos.",
+        "",
+    ]
+    for rel, body in proto_files:
+        parts.append(f"### `{rel}`")
+        parts.append("")
+        parts.append("```proto")
+        parts.append(body.rstrip())
+        parts.append("```")
+        parts.append("")
+    return "\n".join(parts)
+
+
+def review_code_with_claude(diff_content, total_changes, repo_path=".", proto_context=None):
     """Use Claude to review the PR diff."""
     client = Anthropic()
     
@@ -81,11 +126,16 @@ Be constructive, specific, and actionable. Focus on:
 
 Format your response as clear sections with markdown. Be concise but thorough."""
 
-    user_message = f"""Please review this pull request:
+    pr_section = f"""Please review this pull request:
 
 {diff_content}
 
 Total lines changed: {total_changes}"""
+
+    if proto_context:
+        user_message = f"{proto_context}\n\n---\n\n{pr_section}"
+    else:
+        user_message = pr_section
 
     message = client.messages.create(
         model="claude-opus-4-6",
@@ -143,10 +193,21 @@ def main():
             return
         
         print(f"📊 Found {total_changes} lines changed across {len(list(pr.get_files()))} files")
-        
+
+        # Load proto context if the workflow checked out a proto repo for us
+        proto_context_path = os.getenv("PROTO_CONTEXT_PATH")
+        proto_repo = os.getenv("PROTO_REPO")
+        proto_ref = os.getenv("PROTO_REF")
+        proto_context = None
+        if proto_context_path:
+            print(f"📂 Loading proto context from {proto_repo}@{proto_ref} ({proto_context_path})")
+            proto_context = load_proto_context(proto_context_path, proto_repo, proto_ref)
+
         # Get Claude's review
         print("🤔 Getting Claude's review...")
-        review_text = review_code_with_claude(diff_content, total_changes, repo_path=".")
+        review_text = review_code_with_claude(
+            diff_content, total_changes, repo_path=".", proto_context=proto_context
+        )
         
         # Post the review
         print("📤 Posting review to GitHub...")

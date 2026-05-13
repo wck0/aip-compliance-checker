@@ -9,6 +9,22 @@ The user provides a GitHub PR URL or `owner/repo#number`. Your job is to do a th
 
 ---
 
+## Step 0 — Use the Proto Definitions Context (when provided)
+
+When invoked from CI, the user message may include a `## Proto Definitions Context` block *before* the PR diff. These are the `.proto` files fetched from a companion proto repository — by convention, the branch in that repo whose name shares the `lndeng-<number>` prefix of the PR's head branch, falling back to `main` if no matching branch exists.
+
+Treat these protos as the authoritative API surface:
+
+- Cross-reference Go types, request/response structs, and method signatures in the PR against the proto messages and RPCs they implement or call.
+- Validate Go method naming against proto RPC naming for AIP-131..AIP-135 (Get/List/Create/Update/Delete) and AIP-136 (custom verbs).
+- Check that Go field names follow the proto `snake_case` → Go `CamelCase` mapping per AIP-140.
+- Enforce `field_behavior` annotations (AIP-148) and resource annotations (AIP-122/123) defined in the proto when judging the Go code.
+- If the Go PR introduces or relies on API surface that is **not** present in the proto context, flag it as a `blocking` violation: the corresponding proto change is missing or lives on a branch that wasn't matched. Mention the proto repo + ref that was used so the author can verify.
+
+If no proto context block is present, proceed with code-only analysis and note in the summary that proto-level rules were evaluated on a best-effort basis.
+
+---
+
 ## Step 1 — Fetch the PR via GitHub MCP
 
 Use the GitHub MCP tools to:
