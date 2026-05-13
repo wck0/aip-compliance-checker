@@ -71,7 +71,7 @@ jobs:
       - name: Resolve proto repo branch
         id: proto
         env:
-          PROTO_REPO: ${{ inputs.proto_repo || 'david-mclain/landscape-proto' }}
+          PROTO_REPO: ${{ inputs.proto_repo || 'canonical/landscape-proto' }}
           HEAD_REF: ${{ github.head_ref }}
           PROTO_REPO_TOKEN: ${{ secrets.PROTO_REPO_TOKEN }}
         run: |
