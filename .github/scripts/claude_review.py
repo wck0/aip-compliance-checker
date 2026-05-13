@@ -7,12 +7,23 @@ and posts feedback as GitHub comments.
 import os
 import json
 import time
-from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
+from collections import namedtuple
+import anthropic
+from anthropic import Anthropic
+import openai
+from openai import OpenAI
 from github import Github
 
 MAX_RETRIES = 5
 INITIAL_BACKOFF_SECONDS = 5
 MAX_BACKOFF_SECONDS = 60
+MAX_TOKENS = 2000
+
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_MODEL = "anthropic/claude-opus-4-6"
+ANTHROPIC_MODEL = "claude-opus-4-6"
+
+Backend = namedtuple("Backend", ["kind", "client", "model"])
 
 
 class ClaudeAPIUnavailableError(Exception):
@@ -42,50 +53,91 @@ def _retry_after_seconds(error):
 
 
 def _format_rate_limit_diagnostics(error):
-    """Pull the error body and anthropic-ratelimit-* headers off a 429 for logging."""
+    """Pull the error body and any ratelimit-related headers off a 429 for logging."""
     parts = [f"error={error}"]
     headers = _response_headers(error) or {}
     interesting = sorted(
         (k, v) for k, v in headers.items()
-        if k.lower().startswith("anthropic-ratelimit-") or k.lower() == "retry-after"
+        if "ratelimit" in k.lower() or k.lower() == "retry-after"
     )
     if interesting:
         parts.append("headers={" + ", ".join(f"{k}={v}" for k, v in interesting) + "}")
     return " | ".join(parts)
 
 
-def _create_message_with_retries(client, **kwargs):
-    """Call Anthropic, retrying on rate limits and transient server errors."""
+def _call_with_retries(call_fn):
+    """Invoke call_fn, retrying on rate limits and transient server errors from either backend."""
     for attempt in range(MAX_RETRIES + 1):
         try:
-            return client.messages.create(**kwargs)
-        except RateLimitError as e:
+            return call_fn()
+        except (anthropic.RateLimitError, openai.RateLimitError) as e:
             diagnostics = _format_rate_limit_diagnostics(e)
             if attempt == MAX_RETRIES:
-                print(f"❌ Anthropic rate-limited after {MAX_RETRIES + 1} attempts | {diagnostics}")
+                print(f"❌ Rate-limited after {MAX_RETRIES + 1} attempts | {diagnostics}")
                 raise ClaudeAPIUnavailableError("rate limited", e) from e
             wait = _retry_after_seconds(e) or min(
                 INITIAL_BACKOFF_SECONDS * (2 ** attempt), MAX_BACKOFF_SECONDS
             )
             print(
-                f"⏳ Anthropic rate-limited (attempt {attempt + 1}/{MAX_RETRIES + 1}); "
+                f"⏳ Rate-limited (attempt {attempt + 1}/{MAX_RETRIES + 1}); "
                 f"sleeping {wait}s | {diagnostics}"
             )
-        except APIStatusError as e:
+        except (anthropic.APIStatusError, openai.APIStatusError) as e:
             status = getattr(e, "status_code", None)
             if status is None or status < 500:
                 raise
             if attempt == MAX_RETRIES:
                 raise ClaudeAPIUnavailableError(f"API status {status}", e) from e
             wait = min(INITIAL_BACKOFF_SECONDS * (2 ** attempt), MAX_BACKOFF_SECONDS)
-            print(f"⏳ Anthropic API error {status} (attempt {attempt + 1}/{MAX_RETRIES + 1}); sleeping {wait}s")
-        except APIConnectionError as e:
+            print(f"⏳ API error {status} (attempt {attempt + 1}/{MAX_RETRIES + 1}); sleeping {wait}s")
+        except (anthropic.APIConnectionError, openai.APIConnectionError) as e:
             if attempt == MAX_RETRIES:
                 raise ClaudeAPIUnavailableError("connection error", e) from e
             wait = min(INITIAL_BACKOFF_SECONDS * (2 ** attempt), MAX_BACKOFF_SECONDS)
-            print(f"⏳ Anthropic connection error (attempt {attempt + 1}/{MAX_RETRIES + 1}); sleeping {wait}s")
+            print(f"⏳ Connection error (attempt {attempt + 1}/{MAX_RETRIES + 1}); sleeping {wait}s")
         time.sleep(wait)
-    raise RuntimeError("Anthropic retry loop exited without returning")
+    raise RuntimeError("Retry loop exited without returning")
+
+
+def _select_backend():
+    """Pick a chat backend; OpenRouter wins when its key is set, else fall back to the Anthropic OAuth path."""
+    openrouter_key = os.getenv("OPENROUTER_API_KEY")
+    if openrouter_key:
+        print(f"🔌 Using OpenRouter backend (model={OPENROUTER_MODEL})")
+        client = OpenAI(api_key=openrouter_key, base_url=OPENROUTER_BASE_URL, max_retries=0)
+        return Backend(kind="openrouter", client=client, model=OPENROUTER_MODEL)
+    oauth_token = os.getenv("CLAUDE_CODE_OAUTH_TOKEN")
+    if oauth_token:
+        print(f"🔌 Using Anthropic OAuth backend (model={ANTHROPIC_MODEL})")
+        client = Anthropic(auth_token=oauth_token, max_retries=0)
+        return Backend(kind="anthropic", client=client, model=ANTHROPIC_MODEL)
+    raise RuntimeError("Neither OPENROUTER_API_KEY nor CLAUDE_CODE_OAUTH_TOKEN is set")
+
+
+def _invoke_chat(backend, system_prompt, user_message):
+    """Call the selected backend with retries and return the assistant's text."""
+    if backend.kind == "openrouter":
+        def call():
+            return backend.client.chat.completions.create(
+                model=backend.model,
+                max_tokens=MAX_TOKENS,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
+            )
+        resp = _call_with_retries(call)
+        return resp.choices[0].message.content
+
+    def call():
+        return backend.client.messages.create(
+            model=backend.model,
+            max_tokens=MAX_TOKENS,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_message}],
+        )
+    resp = _call_with_retries(call)
+    return resp.content[0].text
 
 def get_pr_diff(gh_client, repo_owner, repo_name, pr_number):
     """Fetch the diff for a pull request."""
@@ -177,12 +229,9 @@ def load_proto_context(proto_context_path, proto_repo=None, proto_ref=None):
 
 
 def review_code_with_claude(diff_content, total_changes, repo_path=".", proto_context=None):
-    """Use Claude to review the PR diff."""
-    oauth_token = os.getenv("CLAUDE_CODE_OAUTH_TOKEN")
-    if not oauth_token:
-        raise RuntimeError("CLAUDE_CODE_OAUTH_TOKEN is not set")
-    client = Anthropic(auth_token=oauth_token, max_retries=0)
-    
+    """Use Claude (via OpenRouter or Anthropic OAuth) to review the PR diff."""
+    backend = _select_backend()
+
     # Try to load custom skill from repository
     custom_skill = load_review_skill(repo_path)
     
@@ -218,17 +267,7 @@ Total lines changed: {total_changes}"""
     else:
         user_message = pr_section
 
-    message = _create_message_with_retries(
-        client,
-        model="claude-opus-4-6",
-        max_tokens=2000,
-        system=system_prompt,
-        messages=[
-            {"role": "user", "content": user_message}
-        ]
-    )
-    
-    return message.content[0].text
+    return _invoke_chat(backend, system_prompt, user_message)
 
 
 def post_review_comment(gh_client, repo_owner, repo_name, pr_number, review_text):
@@ -266,13 +305,17 @@ Re-run the **Claude Code Review** workflow on this PR to try again.
 
 def main():
     # Get environment variables
+    openrouter_key = os.getenv("OPENROUTER_API_KEY")
     oauth_token = os.getenv("CLAUDE_CODE_OAUTH_TOKEN")
     github_token = os.getenv("GITHUB_TOKEN")
     pr_number = int(os.getenv("PR_NUMBER"))
     repo_owner = os.getenv("REPO_OWNER")
     repo_name = os.getenv("REPO_NAME")
 
-    if not all([oauth_token, github_token, pr_number, repo_owner, repo_name]):
+    if not (openrouter_key or oauth_token):
+        print("❌ Need either OPENROUTER_API_KEY or CLAUDE_CODE_OAUTH_TOKEN")
+        return
+    if not all([github_token, pr_number, repo_owner, repo_name]):
         print("❌ Missing required environment variables")
         return
     
