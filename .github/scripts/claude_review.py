@@ -21,7 +21,7 @@ MAX_TOKENS = 2000
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_MODEL = "anthropic/claude-opus-4.7"
-ANTHROPIC_MODEL = "claude-opus-4-6"
+ANTHROPIC_MODEL = "claude-opus-4-7"
 
 Backend = namedtuple("Backend", ["kind", "client", "model"])
 
