@@ -20,7 +20,7 @@ MAX_BACKOFF_SECONDS = 60
 MAX_TOKENS = 2000
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_OPENROUTER_MODEL = "anthropic/claude-opus-4.7"
+DEFAULT_OPENROUTER_MODEL = "google/gemma-4-31b-it"
 ANTHROPIC_MODEL = "claude-opus-4-7"
 
 Backend = namedtuple("Backend", ["kind", "client", "model"])
