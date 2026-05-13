@@ -25,7 +25,7 @@ on:
       proto_repo:
         required: false
         type: string
-        default: 'david-mclain/landscape-proto'
+        default: 'canonical/landscape-proto'
         description: 'Repository containing proto definitions used as context for the AIP review (owner/repo format)'
 
 permissions:
