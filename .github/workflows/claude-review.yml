@@ -8,6 +8,9 @@ on:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
         description: 'Claude Code OAuth token for Claude access'
+      PROTO_REPO_TOKEN:
+        required: false
+        description: 'GitHub token with read access to the proto repo (required if proto_repo is private)'
     inputs:
       script_repo:
         required: false
@@ -62,12 +65,17 @@ jobs:
         env:
           PROTO_REPO: ${{ inputs.proto_repo || 'canonical/landscape-proto' }}
           HEAD_REF: ${{ github.head_ref }}
+          PROTO_REPO_TOKEN: ${{ secrets.PROTO_REPO_TOKEN }}
         run: |
           PREFIX=$(echo "$HEAD_REF" | grep -oE '^lndeng-[0-9]+' || true)
           PROTO_BRANCH=""
           if [ -n "$PREFIX" ]; then
             echo "🔎 Looking for branch starting with '$PREFIX' in $PROTO_REPO"
-            PROTO_BRANCH=$(git ls-remote --heads "https://github.com/${PROTO_REPO}.git" "${PREFIX}*" \
+            PROTO_REMOTE_URL="https://github.com/${PROTO_REPO}.git"
+            if [ -n "$PROTO_REPO_TOKEN" ]; then
+              PROTO_REMOTE_URL="https://x-access-token:${PROTO_REPO_TOKEN}@github.com/${PROTO_REPO}.git"
+            fi
+            PROTO_BRANCH=$(git ls-remote --heads "$PROTO_REMOTE_URL" "${PREFIX}*" \
               | head -n 1 | awk '{print $2}' | sed 's|refs/heads/||')
           fi
           if [ -z "$PROTO_BRANCH" ]; then
@@ -85,6 +93,7 @@ jobs:
           repository: ${{ steps.proto.outputs.proto_repo }}
           ref: ${{ steps.proto.outputs.proto_ref }}
           path: .proto-context
+          token: ${{ secrets.PROTO_REPO_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Review PR with Claude
         env:
