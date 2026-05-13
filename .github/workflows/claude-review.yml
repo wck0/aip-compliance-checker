@@ -7,7 +7,18 @@ on:
     secrets:
       ANTHROPIC_API_KEY:
         required: true
-        description: ''
+        description: 'Anthropic API key for Claude access'
+    inputs:
+      script_repo:
+        required: false
+        type: string
+        default: 'wck0/aip-compliance-checker'
+        description: 'Repository containing the claude_review.py script (owner/repo format)'
+      script_ref:
+        required: false
+        type: string
+        default: 'main'
+        description: 'Branch/tag/ref to download the script from'
 
 permissions:
   contents: read
@@ -28,6 +39,18 @@ jobs:
       
       - name: Install dependencies
         run: pip install anthropic PyGithub
+      
+      - name: Download Claude review script and skill
+        run: |
+          mkdir -p .github/scripts
+          mkdir -p .claude/skills/aip-review
+          echo "📥 Downloading claude_review.py from ${{ inputs.script_repo }}@${{ inputs.script_ref }}"
+          curl -L -o .github/scripts/claude_review.py \
+            "https://raw.githubusercontent.com/${{ inputs.script_repo }}/${{ inputs.script_ref }}/.github/scripts/claude_review.py"
+          chmod +x .github/scripts/claude_review.py
+          echo "📚 Downloading aip-review skill from ${{ inputs.script_repo }}@${{ inputs.script_ref }}"
+          curl -L -o .claude/skills/aip-review/SKILL.md \
+            "https://raw.githubusercontent.com/${{ inputs.script_repo }}/${{ inputs.script_ref }}/.claude/skills/aip-review/SKILL.md"
       
       - name: Review PR with Claude
         env:
