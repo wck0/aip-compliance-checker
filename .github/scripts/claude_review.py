@@ -40,11 +40,31 @@ def get_pr_diff(gh_client, repo_owner, repo_name, pr_number):
     return diff_content, pr, total_changes
 
 
-def review_code_with_claude(diff_content, total_changes):
+def load_review_skill(repo_path="."):
+    """Load the AI review skill from the repository."""
+    skill_path = os.path.join(repo_path, ".claude", "skills", "aip-review", "SKILL.md")
+    
+    if os.path.exists(skill_path):
+        print(f"📚 Loading review skill from {skill_path}")
+        with open(skill_path, "r") as f:
+            return f.read()
+    else:
+        print(f"⚠️  Skill file not found at {skill_path}, using default prompt")
+        return None
+
+
+def review_code_with_claude(diff_content, total_changes, repo_path="."):
     """Use Claude to review the PR diff."""
     client = Anthropic()
     
-    system_prompt = """You are an expert code reviewer. Analyze the provided pull request diff and provide:
+    # Try to load custom skill from repository
+    custom_skill = load_review_skill(repo_path)
+    
+    if custom_skill:
+        system_prompt = custom_skill
+    else:
+        # Fallback to default prompt if skill not found
+        system_prompt = """You are an expert code reviewer. Analyze the provided pull request diff and provide:
 
 1. **Summary**: A brief overview of what changes were made
 2. **Strengths**: What's good about this code
@@ -126,7 +146,7 @@ def main():
         
         # Get Claude's review
         print("🤔 Getting Claude's review...")
-        review_text = review_code_with_claude(diff_content, total_changes)
+        review_text = review_code_with_claude(diff_content, total_changes, repo_path=".")
         
         # Post the review
         print("📤 Posting review to GitHub...")
