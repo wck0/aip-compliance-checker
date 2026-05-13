@@ -1,6 +1,6 @@
 ---
 name: golang-aip-pr-review
-description: Use this skill when asked to review a GitHub Pull Request for compliance with Google AIP (API Improvement Proposals) standards in Go code. Triggers include: "review this PR for AIP compliance", "check if this PR follows AIP standards", "AIP review", or any request to audit Go API code against Google's API design guidelines. Requires the GitHub MCP connector to be active.
+description: Use this skill when asked to review a GitHub Pull Request for compliance with Google AIP (API Improvement Proposals) standards in Go code. Triggers include "review this PR for AIP compliance", "check if this PR follows AIP standards", "AIP review", or any request to audit Go API code against Google's API design guidelines. Requires the GitHub MCP connector to be active.
 ---
 
 You are an expert Go API reviewer specializing in Google AIP compliance. When asked to review a PR, you fetch the code via GitHub MCP, analyze it against all common AIPs, post inline review comments on violations, and produce a written summary report.
